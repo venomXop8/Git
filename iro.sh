@@ -1,93 +1,88 @@
 #!/bin/bash
 
-# Telegram Ultimate Customizer
-echo "🚀 Building irogram (Custom Branding + Red/White Chat Bubbles)..."
+# Pterodactyl Panel & Wings (Docker) Installation Script
+# For use in CodeSandbox Linux environments
 
-# Install dependencies
-sudo apt update -y && sudo apt install -y wget unzip git openjdk-17-jdk imagemagick
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-# Setup Android SDK
-wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-unzip -q commandlinetools-linux-9477386_latest.zip
-rm -f commandlinetools-linux-9477386_latest.zip
-mkdir -p android-sdk/cmdline-tools/latest
-mv cmdline-tools/* android-sdk/cmdline-tools/latest/
-rm -rf cmdline-tools
-
-# Environment variables
-export ANDROID_SDK_ROOT="$PWD/android-sdk"
-export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
-export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
-
-# Accept licenses
-yes | sdkmanager --licenses > /dev/null
-sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653"
-
-# Clone Telegram source
-git clone --depth=1 https://github.com/DrKLO/Telegram.git
-cd Telegram
-
-# ===== CUSTOMIZATIONS =====
-
-# 1. Replace ALL UI instances of "Telegram" with "irogram" (except chat messages)
-find . -type f \( -name "*.xml" -o -name "*.java" -o -name "*.kt" \) \
-  -exec grep -l "Telegram" {} \; \
-  | xargs sed -i 's/Telegram/irogram/g'
-
-# 2. Revert changes in chat message strings
-sed -i 's/irogram/Telegram/g' TMessagesProj/src/main/res/values*/strings.xml
-sed -i 's/irogram/Telegram/g' TMessagesProj/src/main/java/org/telegram/messenger/*.java
-
-# 3. App Icon (512x512)
-if [ -f ../logo.png ]; then
-  echo "🖼️ Replacing app icon..."
-  convert ../logo.png -resize 512x512 ../logo_resized.png
-  cp ../logo_resized.png TMessagesProj/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-  cp ../logo_resized.png TMessagesProj/src/main/res/mipmap-xxhdpi/ic_launcher.png
-  cp ../logo_resized.png TMessagesProj/src/main/res/mipmap-xhdpi/ic_launcher.png
-  cp ../logo_resized.png TMessagesProj/src/main/res/mipmap-hdpi/ic_launcher.png
-  cp ../logo_resized.png TMessagesProj/src/main/res/mipmap-mdpi/ic_launcher.png
-  rm ../logo_resized.png
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}This script must be run as root${NC}" 
+    exit 1
 fi
 
-# 4. Launch Screen (1242x2688)
-if [ -f ../launch.jpg ]; then
-  echo "🌅 Replacing launch screen..."
-  convert ../launch.jpg -resize 1242x2688^ -gravity center -extent 1242x2688 ../launch_resized.jpg
-  cp ../launch_resized.jpg TMessagesProj/src/main/res/drawable/launch_screen.jpg
-  rm ../launch_resized.jpg
+# Check if running in CodeSandbox
+if [[ ! -f /.codesandbox/sandbox ]]; then
+    echo -e "${YELLOW}Warning: This script is designed for CodeSandbox environments${NC}"
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
 fi
 
-# 5. Red/White Chat Bubbles with Black Text
-cat << 'EOT' > TMessagesProj/src/main/res/values/colors.xml
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Branding -->
-    <color name="actionBarDefault">#FF0000</color>
-    <color name="actionBarDefaultWhite">#FFFFFFFF</color>
-    
-    <!-- Chat Bubbles -->
-    <color name="chat_outBubble">#FFFF0000</color> <!-- Your messages: RED -->
-    <color name="chat_inBubble">#FFFFFFFF</color> <!-- Their messages: WHITE -->
-    <color name="chat_outBubbleText">#FF000000</color> <!-- BLACK text -->
-    <color name="chat_inBubbleText">#FF000000</color> <!-- BLACK text -->
-    
-    <!-- Dark Theme -->
-    <color name="windowBackgroundWhite">#FF121212</color>
-    <color name="windowBackgroundGray">#FF1E1E1E</color>
-</resources>
-EOT
+# Update system
+echo -e "${BLUE}Updating system packages...${NC}"
+apt-get update
+apt-get upgrade -y
+apt-get install -y curl git docker.io docker-compose
 
-# 6. Force Dark Mode
-sed -i '/<application/a \
-    <meta-data android:name="android.force_dark" android:value="true" />' \
-    TMessagesProj/src/main/AndroidManifest.xml
+# Start Docker
+echo -e "${BLUE}Starting Docker...${NC}"
+systemctl enable docker
+systemctl start docker
 
-# Build
-echo "🛠️ Building irogram APK (this may take 20-40 mins)..."
-./gradlew assembleDebug
+# Clone Pterodactyl Docker project
+echo -e "${BLUE}Downloading Pterodactyl Docker setup...${NC}"
+git clone https://github.com/pterodactyl/standalone /var/www/pterodactyl
+cd /var/www/pterodactyl || exit
 
-# Output
-APK_PATH="$PWD/TMessagesProj/build/outputs/apk/debug/*.apk"
-echo "✅ Build successful! Your customized irogram APK:"
-echo "$APK_PATH"
+# Setup environment variables
+echo -e "${BLUE}Configuring Pterodactyl...${NC}"
+cp .env.example .env
+
+# Generate a random key for the panel
+echo -e "${BLUE}Generating application key...${NC}"
+sed -i 's/APP_KEY=.*/APP_KEY=base64:'$(openssl rand -base64 32)'/' .env
+
+# Set panel URL (CodeSandbox uses a dynamic URL)
+echo -e "${BLUE}Setting up panel URL...${NC}"
+sed -i 's/APP_URL=.*/APP_URL=http:\/\/localhost/' .env
+
+# Build and start containers
+echo -e "${BLUE}Starting Docker containers...${NC}"
+docker-compose up -d --build
+
+# Wait for MySQL to be ready
+echo -e "${BLUE}Waiting for MySQL to start...${NC}"
+sleep 30
+
+# Run migrations and seed database
+echo -e "${BLUE}Setting up database...${NC}"
+docker-compose exec panel php artisan migrate --seed --force
+
+# Create admin user
+echo -e "${GREEN}Create first admin user${NC}"
+echo -e "${YELLOW}Please provide the following details:${NC}"
+read -p "Email: " email
+read -p "Username: " username
+read -sp "Password: " password
+echo
+
+docker-compose exec panel php artisan p:user:make \
+    --email="$email" \
+    --username="$username" \
+    --name-first="Admin" \
+    --name-last="User" \
+    --password="$password" \
+    --admin=1
+
+# Display completion message
+echo -e "${GREEN}\nPterodactyl Panel & Wings (Docker) installation complete!${NC}"
+echo -e "${YELLOW}You can access the panel at: http://localhost${NC}"
+echo -e "${YELLOW}To stop the containers, run: docker-compose down${NC}"
